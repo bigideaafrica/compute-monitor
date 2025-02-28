@@ -1,158 +1,138 @@
-import { AlertTriangle, BarChart3, Clock, Search, XCircle } from 'lucide-react';
-import React, { useState } from 'react';
-
-// Import components
-import ClusterStatsCard from './components/ClusterStatsCard';
-import ClusterTable from './components/ClusterTable';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import React, { useEffect, useState } from 'react';
+import { toast, Toaster } from 'react-hot-toast';
 import Navigation from './components/Navigation';
-import StatusFilter from './components/StatusFilter';
-
-// Import data from separate file
-import { initialClusters } from './data/data';
+import { db } from './data/firebase';
+import AdminRegistration from './screens/AdminRegistration';
+import Dashboard from './screens/Dashboard';
+import LoginScreen from './screens/LoginScreen';
 
 function App() {
-  // State for dark mode
-  const [darkMode, setDarkMode] = useState(false);
-  
-  // Toggle dark mode function
+  const [darkMode, setDarkMode] = useState(() => {
+    const savedMode = localStorage.getItem('darkMode');
+    return savedMode ? JSON.parse(savedMode) : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminCheckComplete, setAdminCheckComplete] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+
+  useEffect(() => {
+    const auth = getAuth();
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      
+      if (currentUser) {
+        try {
+          // Check if the user has admin rights
+          const usersCollection = collection(db, 'users');
+          const adminQuery = query(
+            usersCollection, 
+            where('email', '==', currentUser.email.toLowerCase()),
+            where('user_type', '==', 'pol_admin')
+          );
+          const adminSnapshot = await getDocs(adminQuery);
+          
+          if (adminSnapshot.empty) {
+            console.log("User is not an admin, signing out");
+            toast.error("Access denied: Admin privileges required");
+            await auth.signOut();
+            setUser(null);
+            setIsAdmin(false);
+          } else {
+            console.log("User verified as admin");
+            setIsAdmin(true);
+          }
+        } catch (error) {
+          console.error("Error checking admin status:", error);
+          toast.error("Error verifying admin permissions");
+          await auth.signOut();
+          setUser(null);
+          setIsAdmin(false);
+        }
+      } else {
+        setIsAdmin(false);
+      }
+      
+      setAdminCheckComplete(true);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('darkMode', JSON.stringify(darkMode));
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
+
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
   };
   
-  const [clusters, setClusters] = useState(initialClusters);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('Show All');
-
-  // Stats calculations
-  const runningClusters = clusters.filter(c => c.status === 'Running').length;
-  const deployingClusters = clusters.filter(c => c.status === 'Deploying').length;
-  const failedClusters = clusters.filter(c => c.status === 'Failed').length;
-  const totalIncidents = clusters.filter(c => c.incident).length;
-
-  // Handlers
-  const handleSearchChange = (e) => {
-    setSearchTerm(e.target.value);
+  const handleOpenAdminPanel = () => {
+    setShowAdminPanel(true);
+  };
+  
+  const handleCloseAdminPanel = () => {
+    setShowAdminPanel(false);
+  };
+  
+  const handleLoginSuccess = (user) => {
+    setUser(user);
+    setIsAdmin(true);
   };
 
-  const handleStatusChange = (status) => {
-    setStatusFilter(status);
-  };
-
-  const handleTerminate = (index) => {
-    setClusters((prevClusters) =>
-      prevClusters.map((cluster, i) =>
-        i === index && (cluster.status === 'Running' || cluster.status === 'Deploying')
-          ? { ...cluster, status: 'Terminated', cpuUsage: 0, memoryUsage: 0 }
-          : cluster
-      )
-    );
-  };
-
-  const handleRename = (index) => {
-    const newName = prompt("Enter new name for the cluster:");
-    if (newName) {
-      setClusters((prevClusters) =>
-        prevClusters.map((cluster, i) =>
-          i === index ? { ...cluster, name: newName } : cluster
-        )
-      );
-    }
-  };
-
-  // Filtered clusters
-  const filteredClusters = clusters.filter(cluster => {
-    const matchesSearch = cluster.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'Show All' || cluster.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
-
-  return (
-    <div className={`min-h-screen w-full ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'}`}>
-      {/* Top Navigation */}
-      <Navigation darkMode={darkMode} toggleDarkMode={toggleDarkMode} />
-
-      {/* Main content - reduced padding */}
-      <main className="max-w-7xl mx-auto px-2 sm:px-4 py-4 pt-16 pb-12">
-        {/* Dashboard Header */}
-        <div className="mb-3">
-          <h1 className="text-lg font-bold mb-1">Compute Monitor Dashboard</h1>
-          <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-            Fast, Simple, Scalable, & Accelerated GPU clusters focused on Simplicity, Speed, & Affordability.
-          </p>
-        </div>
-
-        {/* Stats Overview */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-          <ClusterStatsCard 
-            title="Running Clusters" 
-            value={runningClusters} 
-            icon={<BarChart3 className={`w-4 h-4 ${darkMode ? 'text-green-400' : 'text-green-500'}`} />}
-            darkMode={darkMode}
-          />
-          <ClusterStatsCard 
-            title="Deploying Clusters" 
-            value={deployingClusters} 
-            icon={<Clock className={`w-4 h-4 ${darkMode ? 'text-blue-400' : 'text-blue-500'}`} />}
-            darkMode={darkMode}
-          />
-          <ClusterStatsCard 
-            title="Failed Clusters" 
-            value={failedClusters} 
-            icon={<XCircle className={`w-4 h-4 ${darkMode ? 'text-red-400' : 'text-red-500'}`} />}
-            darkMode={darkMode}
-          />
-          <ClusterStatsCard 
-            title="Active Incidents" 
-            value={totalIncidents} 
-            icon={<AlertTriangle className={`w-4 h-4 ${darkMode ? 'text-yellow-400' : 'text-yellow-500'}`} />}
-            darkMode={darkMode}
-          />
-        </div>
-
-        {/* Search and Filters */}
-        <div className={`p-2 rounded mb-3 ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm`}>
-          <div className="sm:flex sm:items-center sm:justify-between">
-            <div className={`relative flex-1 max-w-xs ${darkMode ? 'text-white' : 'text-gray-900'} mb-2 sm:mb-0`}>
-              <div className="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
-                <Search className="h-4 w-4 text-gray-400" />
-              </div>
-              <input
-                type="text"
-                placeholder="Search clusters..."
-                className={`block w-full pl-7 pr-2 py-1 text-xs border rounded ${
-                  darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-500'
-                }`}
-                value={searchTerm}
-                onChange={handleSearchChange}
-              />
-            </div>
-
-            <StatusFilter 
-              statusFilter={statusFilter} 
-              handleStatusChange={handleStatusChange} 
-              darkMode={darkMode} 
-            />
+  // Show loading screen until we've checked admin status
+  if (loading || (user && !adminCheckComplete)) {
+    return (
+      <>
+        <Toaster position="top-right" />
+        <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-black'}`}>
+          <div className="flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500 mb-4"></div>
+            <p className="text-lg">Verifying access...</p>
           </div>
         </div>
+      </>
+    );
+  }
 
-        {/* Clusters Table */}
-        <div className={`p-2 rounded ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm`}>
-          <ClusterTable 
-            filteredClusters={filteredClusters}
-            handleRename={handleRename}
-            handleTerminate={handleTerminate}
+  return (
+    <>
+      <Toaster position="top-right" />
+      <div className={`min-h-screen ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-black'}`}>
+        {user && (
+          <Navigation
             darkMode={darkMode}
+            toggleDarkMode={toggleDarkMode}
+            user={user}
+            onOpenAdminPanel={handleOpenAdminPanel}
           />
+        )}
+        
+        <div className={user ? "pt-20 px-4 max-w-7xl mx-auto" : ""}>
+          {user ? (
+            <Dashboard darkMode={darkMode} currentUser={user} />
+          ) : (
+            <LoginScreen 
+              darkMode={darkMode} 
+              onLoginSuccess={handleLoginSuccess} 
+            />
+          )}
         </div>
-      </main>
-
-      {/* Footer - smaller */}
-      <footer className={`fixed bottom-0 left-0 right-0 z-50 py-2 px-4 border-t ${darkMode ? 'bg-gray-800 border-gray-700 text-gray-400' : 'bg-white border-gray-200 text-gray-500'}`}>
-        <div className="max-w-7xl mx-auto text-xs">
-          <p>© {new Date().getFullYear()} Polaris Cloud | All rights reserved</p>
-        </div>
-      </footer>
-    </div>
+        
+        {showAdminPanel && (
+          <AdminRegistration darkMode={darkMode} onClose={handleCloseAdminPanel} />
+        )}
+      </div>
+    </>
   );
 }
 
