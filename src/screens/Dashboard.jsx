@@ -188,12 +188,31 @@ const Dashboard = ({ darkMode }) => {
     try {
       const subscriptionsCollection = collection(db, 'container_subscriptions');
       const subscriptionsSnapshot = await getDocs(subscriptionsCollection);
-      setTotalSubscriptions(subscriptionsSnapshot.size);
-      console.log(`Total subscriptions: ${subscriptionsSnapshot.size}`);
+      
+      // Filter out subscriptions with "running" status
+      const validSubscriptions = subscriptionsSnapshot.docs.filter(doc => {
+        const data = doc.data();
+        return data.status !== "running";
+      });
+      
+      setTotalSubscriptions(validSubscriptions.length);
+      console.log(`Total subscriptions (excluding running status): ${validSubscriptions.length}`);
+      console.log(`Filtered out ${subscriptionsSnapshot.size - validSubscriptions.length} running subscriptions`);
     } catch (error) {
       console.error("Error fetching subscriptions:", error);
     }
   };
+
+  // const fetchTotalSubscriptions = async () => {
+  //   try {
+  //     const subscriptionsCollection = collection(db, 'container_subscriptions');
+  //     const subscriptionsSnapshot = await getDocs(subscriptionsCollection);
+  //     setTotalSubscriptions(subscriptionsSnapshot.size);
+  //     console.log(`Total subscriptions: ${subscriptionsSnapshot.size}`);
+  //   } catch (error) {
+  //     console.error("Error fetching subscriptions:", error);
+  //   }
+  // };
 
   const calculateTotalComputeHours = async () => {
     try {
