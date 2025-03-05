@@ -1,3 +1,4 @@
+/* eslint-disable react/prop-types */
 import React from 'react';
 import { getStatusColor, getUsageColor } from '../utils/utils';
 import ActionDropdown from './ActionDropdown';
@@ -56,7 +57,14 @@ const CommuneBadge = ({ darkMode }) => (
   </div>
 );
 
-const ClusterTable = ({ filteredClusters, handleRename, handleTerminate, handleViewMetrics, handleViewPods, darkMode, communeMiners }) => {
+const BittensorBadge = ({ darkMode }) => (
+  <div className={`flex items-center gap-1.5 px-3 pr-5 py-1 rounded-full ${darkMode ? 'bg-blue-900/40 text-blue-300' : 'bg-blue-100 text-blue-600'}`}>
+    <NetworkIcon />
+    <span className="text-xs font-medium">bittensor</span>
+  </div>
+);
+
+const ClusterTable = ({ filteredClusters, handleRename, handleValidate, handleDelete, handleViewMetrics, handleViewPods, darkMode, communeMiners, bittensorMiners }) => {
   return (
     <div className="h-[420px] relative">
       <div className={`absolute inset-0 overflow-auto ${darkMode ? 'scrollbar-dark' : 'scrollbar-light'}`}>
@@ -73,7 +81,7 @@ const ClusterTable = ({ filteredClusters, handleRename, handleTerminate, handleV
               <th className="text-left p-2 w-[150px] font-semibold">CPUs/GPUs</th>
               <th className="text-left p-2 w-[150px] font-semibold">Usage</th>
               <th className="text-left p-2 w-[150px] font-semibold">System Details</th>
-              <th className="text-right p-2 w-[50px]"></th>
+              <th className="text-left p-2 w-[80px] font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -107,6 +115,8 @@ const ClusterTable = ({ filteredClusters, handleRename, handleTerminate, handleV
                 <td className="p-2">
                   {communeMiners && communeMiners.includes(cluster.id) ? (
                     <CommuneBadge darkMode={darkMode} />
+                  ) : bittensorMiners && bittensorMiners.includes(cluster.id) ? (
+                    <BittensorBadge darkMode={darkMode} />
                   ) : (
                     <span className="text-xs text-gray-500">-</span>
                   )}
@@ -140,13 +150,15 @@ const ClusterTable = ({ filteredClusters, handleRename, handleTerminate, handleV
                     </div>
                   </div>
                 </td>
-                <td className="p-2 text-right">
+                <td className="p-2 text-left">
                   <ActionDropdown
                     onRename={() => handleRename(index)}
-                    onTerminate={() => handleTerminate(index)}
+                    onValidate={() => handleValidate(index)}
+                    onDelete={() => handleDelete(index)}
                     onViewMetrics={handleViewMetrics ? () => handleViewMetrics(index) : null}
                     onViewPods={handleViewPods ? () => handleViewPods(index) : null}
                     clusterStatus={cluster.status}
+                    validationStatus={cluster.validationStatus}
                     darkMode={darkMode}
                   />
                 </td>

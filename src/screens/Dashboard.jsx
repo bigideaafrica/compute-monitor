@@ -1,6 +1,8 @@
-import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
+/* eslint-disable react/prop-types */
+import { collection, deleteDoc, doc, getDocs, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { BarChart3, BugPlay, Clock, Search, XCircle } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { toast } from 'react-hot-toast';
 import ClusterStatsCard from '../components/ClusterStatsCard';
 import ClusterTable from '../components/ClusterTable';
 import MetricsModal from '../components/MetricsModal';
@@ -16,6 +18,7 @@ const Dashboard = ({ darkMode }) => {
   const [selectedCluster, setSelectedCluster] = useState(null);
   const [showMetricsModal, setShowMetricsModal] = useState(false);
   const [communeMiners, setCommuneMiners] = useState([]);
+  const [bittensorMiners, setBittensorMiners] = useState([]);
   const [viewMode, setViewMode] = useState('dashboard');
   const [selectedMinerId, setSelectedMinerId] = useState(null);
   const [totalSubscriptions, setTotalSubscriptions] = useState(0);
@@ -172,15 +175,23 @@ const Dashboard = ({ darkMode }) => {
 
   const fetchCommuneMiners = async () => {
     try {
-      const communeCollection = collection(db, 'commune_miners');
-      const communeSnapshot = await getDocs(communeCollection);
-      const communeMinerIds = communeSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        return data.miner_id;
-      });
-      setCommuneMiners(communeMinerIds);
+      const q = query(collection(db, 'commune_miners'));
+      const querySnapshot = await getDocs(q);
+      const minerIds = querySnapshot.docs.map(doc => doc.data().miner_id);
+      setCommuneMiners(minerIds);
     } catch (error) {
       console.error("Error fetching commune miners:", error);
+    }
+  };
+
+  const fetchBittensorMiners = async () => {
+    try {
+      const q = query(collection(db, 'bittensor_miners'));
+      const querySnapshot = await getDocs(q);
+      const minerIds = querySnapshot.docs.map(doc => doc.data().miner_id);
+      setBittensorMiners(minerIds);
+    } catch (error) {
+      console.error("Error fetching bittensor miners:", error);
     }
   };
 
@@ -250,26 +261,55 @@ const Dashboard = ({ darkMode }) => {
     const fetchData = async () => {
       console.log("Starting data fetch...");
       try {
-        const minersCollection = collection(db, 'miners');
-        const minersSnapshot = await getDocs(minersCollection);
-        console.log("Fetched miners collection:", minersSnapshot.docs.length, "documents");
-        const minersData = minersSnapshot.docs.map((doc) => {
+        setLoading(true);
+        const minerCollectionRef = collection(db, 'miners');
+        const minersQuery = query(minerCollectionRef);
+        const querySnapshot = await getDocs(minersQuery);
+        
+        // Process miner documents
+        const clusterData = [];
+        const minerStateUnsubscribes = [];
+        
+        // Fetch commune miners for badges
+        await fetchCommuneMiners();
+        
+        // Fetch bittensor miners for badges
+        await fetchBittensorMiners();
+        
+        // Process each miner document
+        for (const doc of querySnapshot.docs) {
           const data = doc.data();
-          return {
+          
+          // Skip miners with "running" status to match containers logic
+          const minerStatus = data.status?.toLowerCase() || '';
+          if (minerStatus === 'running') {
+            console.log(`Skipping miner with "running" status: ${doc.id}`);
+            continue;
+          }
+          
+          const cluster = {
             id: doc.id,
             name: data.name || 'Unnamed Miner',
-            status: data.status || 'unknown',
+            status: mapFirestoreStatus(data.status),
+            validationStatus: data.status === 'verified' ? 'Verified' : 'Not Verified',
             location: data.location || 'Unknown',
             created_at: data.created_at || new Date().toISOString(),
             computeResources: data.compute_resources || []
           };
-        });
-        console.log("Miners data:", minersData);
-        const initialClusterData = minersData.map((miner) => ({
+          
+          clusterData.push(cluster);
+          console.log(`Setting up listener for miner ${doc.id}`);
+          const minerStateUnsubscribe = setupMinerStateListener(doc.id);
+          minerStateUnsubscribes.push(minerStateUnsubscribe);
+          console.log(`Fetching compute resource for miner ${doc.id}`);
+          await fetchComputeResource(doc.id, data.compute_resources || []);
+        }
+        
+        const initialClusterData = clusterData.map((miner) => ({
           id: miner.id,
           name: miner.name,
           status: mapFirestoreStatus(miner.status),
-          validationStatus: miner.status === 'pending_verification' ? 'Not Verified' : 'Verified',
+          validationStatus: miner.validationStatus,
           location: miner.location,
           created_at: miner.created_at,
           cpuUsage: 0,
@@ -291,13 +331,6 @@ const Dashboard = ({ darkMode }) => {
         }));
         console.log("Initial cluster data:", initialClusterData);
         setClusters(initialClusterData);
-        minersData.forEach((miner) => {
-          console.log(`Setting up listener for miner ${miner.id}`);
-          setupMinerStateListener(miner.id);
-          console.log(`Fetching compute resource for miner ${miner.id}`);
-          fetchComputeResource(miner.id, miner.computeResources);
-        });
-        await fetchCommuneMiners();
         await fetchTotalSubscriptions();
         await calculateTotalComputeHours();
         setLoading(false);
@@ -318,17 +351,6 @@ const Dashboard = ({ darkMode }) => {
   const handleStatusChange = (status) => {
     console.log("Status filter changed to:", status);
     setStatusFilter(status);
-  };
-
-  const handleTerminate = (index) => {
-    console.log("Terminating cluster at index:", index);
-    setClusters((prevClusters) =>
-      prevClusters.map((cluster, i) =>
-        i === index && (cluster.status === 'Running' || cluster.status === 'Deploying')
-          ? { ...cluster, status: 'Terminated', cpuUsage: 0, memoryUsage: 0 }
-          : cluster
-      )
-    );
   };
 
   const handleRename = (index) => {
@@ -368,74 +390,192 @@ const Dashboard = ({ darkMode }) => {
     return matchesSearch && matchesStatus;
   });
 
+  const handleValidate = async (index) => {
+    try {
+      const cluster = filteredClusters[index];
+      const minerId = cluster.id;
+      const minerDocRef = doc(db, 'miners', minerId);
+      
+      // Toggle validation status
+      const newStatus = cluster.validationStatus === 'Verified' ? 'Not Verified' : 'Verified';
+      const newStatusValue = newStatus === 'Verified' ? 'verified' : 'pending_verification';
+      
+      // Update the status field, not validation_status
+      await updateDoc(minerDocRef, {
+        status: newStatusValue
+      });
+      
+      // Update local state
+      setClusters(prevClusters => 
+        prevClusters.map(c => 
+          c.id === minerId 
+            ? {...c, validationStatus: newStatus, status: mapFirestoreStatus(newStatusValue)} 
+            : c
+        )
+      );
+      
+      toast.success(`Miner ${newStatus === 'Verified' ? 'validated' : 'unvalidated'} successfully.`);
+      
+    } catch (error) {
+      console.error("Error validating miner:", error);
+      toast.error("Failed to validate miner");
+    }
+  };
+  
+  const handleDelete = async (index) => {
+    try {
+      const cluster = filteredClusters[index];
+      const minerId = cluster.id;
+      
+      // First check if it's a commune or bittensor miner
+      let networkCollectionPath = null;
+      let networkDocId = null;
+      
+      if (communeMiners.includes(minerId)) {
+        // Find the commune_miners document that references this miner
+        const communeQuery = query(collection(db, 'commune_miners'), where('miner_id', '==', minerId));
+        const communeSnapshot = await getDocs(communeQuery);
+        if (!communeSnapshot.empty) {
+          networkCollectionPath = 'commune_miners';
+          networkDocId = communeSnapshot.docs[0].id;
+        }
+      } else if (bittensorMiners.includes(minerId)) {
+        // Find the bittensor_miners document that references this miner
+        const bittensorQuery = query(collection(db, 'bittensor_miners'), where('miner_id', '==', minerId));
+        const bittensorSnapshot = await getDocs(bittensorQuery);
+        if (!bittensorSnapshot.empty) {
+          networkCollectionPath = 'bittensor_miners';
+          networkDocId = bittensorSnapshot.docs[0].id;
+        }
+      }
+      
+      // Delete the network-specific document if found
+      if (networkCollectionPath && networkDocId) {
+        await deleteDoc(doc(db, networkCollectionPath, networkDocId));
+      }
+      
+      // Delete the miner document
+      await deleteDoc(doc(db, 'miners', minerId));
+      
+      // Remove from local state
+      setClusters(prevClusters => prevClusters.filter(c => c.id !== minerId));
+      
+      // Remove from communeMiners or bittensorMiners arrays if present
+      if (communeMiners.includes(minerId)) {
+        setCommuneMiners(prev => prev.filter(id => id !== minerId));
+      }
+      
+      if (bittensorMiners.includes(minerId)) {
+        setBittensorMiners(prev => prev.filter(id => id !== minerId));
+      }
+      
+      toast.success("Miner deleted successfully");
+      
+    } catch (error) {
+      console.error("Error deleting miner:", error);
+      toast.error("Failed to delete miner");
+    }
+  };
+
   if (viewMode === 'pods' && selectedMinerId) {
     return <PodsView minerId={selectedMinerId} onBack={handleBackToDashboard} darkMode={darkMode} />;
   }
 
   return (
-    <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-        <ClusterStatsCard
-          title="Running Clusters"
-          value={runningClusters}
-          icon={<BarChart3 className={`w-4 h-4 ${darkMode ? 'text-green-400' : 'text-green-500'}`} />}
-          darkMode={darkMode}
-        />
-        <ClusterStatsCard
-          title="Total Subscriptions"
-          value={totalSubscriptions}
-          icon={<BugPlay className={`w-4 h-4 ${darkMode ? 'text-blue-400' : 'text-blue-500'}`} />}
-          darkMode={darkMode}
-        />
-        <ClusterStatsCard
-          title="Failed Clusters"
-          value={failedClusters}
-          icon={<XCircle className={`w-4 h-4 ${darkMode ? 'text-red-400' : 'text-red-500'}`} />}
-          darkMode={darkMode}
-        />
-        <ClusterStatsCard
-          title="Total Service Hours"
-          value={totalComputeHours}
-          icon={<Clock className={`w-4 h-4 ${darkMode ? 'text-yellow-400' : 'text-yellow-500'}`} />}
-          darkMode={darkMode}
-        />
-      </div>
-      <div className={`p-2 rounded mb-3 ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm`}>
-        <div className="sm:flex sm:items-center sm:justify-between">
-          <div className={`relative flex-1 max-w-xs ${darkMode ? 'text-white' : 'text-gray-900'} mb-2 sm:mb-0`}>
-            <div className="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
-              <Search className="h-4 w-4 text-gray-400" />
-            </div>
-            <input
-              type="text"
-              placeholder="Search clusters..."
-              className={`block w-full pl-7 pr-2 py-1 text-xs border rounded ${
-                darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-500'
-              }`}
-              value={searchTerm}
-              onChange={handleSearchChange}
+    <div className={`p-6 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gray-100 text-black'} min-h-screen`}>
+      {viewMode === 'dashboard' ? (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+            <ClusterStatsCard
+              title="Running Clusters"
+              value={runningClusters}
+              icon={<BarChart3 className={`w-4 h-4 ${darkMode ? 'text-green-400' : 'text-green-500'}`} />}
+              darkMode={darkMode}
+            />
+            <ClusterStatsCard
+              title="Total Subscriptions"
+              value={totalSubscriptions}
+              icon={<BugPlay className={`w-4 h-4 ${darkMode ? 'text-blue-400' : 'text-blue-500'}`} />}
+              darkMode={darkMode}
+            />
+            <ClusterStatsCard
+              title="Failed Clusters"
+              value={failedClusters}
+              icon={<XCircle className={`w-4 h-4 ${darkMode ? 'text-red-400' : 'text-red-500'}`} />}
+              darkMode={darkMode}
+            />
+            <ClusterStatsCard
+              title="Total Service Hours"
+              value={totalComputeHours}
+              icon={<Clock className={`w-4 h-4 ${darkMode ? 'text-yellow-400' : 'text-yellow-500'}`} />}
+              darkMode={darkMode}
             />
           </div>
-          <StatusFilter statusFilter={statusFilter} handleStatusChange={handleStatusChange} darkMode={darkMode} />
-        </div>
-      </div>
-      <div className={`p-2 rounded ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm`}>
-        {loading ? (
-          <div className="flex justify-center items-center h-[420px]">
-            <p className="text-sm">Loading clusters...</p>
+          <div className={`p-2 rounded mb-3 ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-sm`}>
+            <div className="sm:flex sm:items-center sm:justify-between">
+              <div className={`relative flex-1 max-w-xs ${darkMode ? 'text-white' : 'text-gray-900'} mb-2 sm:mb-0`}>
+                <div className="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
+                  <Search className="h-4 w-4 text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Search clusters..."
+                  className={`block w-full pl-7 pr-2 py-1 text-xs border rounded ${
+                    darkMode ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-500'
+                  }`}
+                  value={searchTerm}
+                  onChange={handleSearchChange}
+                />
+              </div>
+              <StatusFilter statusFilter={statusFilter} handleStatusChange={handleStatusChange} darkMode={darkMode} />
+            </div>
           </div>
-        ) : (
-          <ClusterTable
-            filteredClusters={filteredClusters}
-            handleRename={handleRename}
-            handleTerminate={handleTerminate}
-            handleViewMetrics={handleViewMetrics}
-            handleViewPods={handleViewPods}
-            darkMode={darkMode}
-            communeMiners={communeMiners}
-          />
-        )}
-      </div>
+          <div className={`mt-6 p-6 rounded-lg ${darkMode ? 'bg-gray-800' : 'bg-white'} shadow-lg`}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-4">
+                <h2 className={`text-xl font-semibold ${darkMode ? 'text-white' : 'text-gray-800'}`}>Compute Resources</h2>
+                <div className={`text-sm px-2 py-1 rounded-full ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'}`}>
+                  {loading ? 'Loading...' : `${filteredClusters.length} resources`}
+                </div>
+              </div>
+            </div>
+            {loading ? (
+              <div className="flex flex-col items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-500 mb-4"></div>
+                <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>Loading compute resources...</p>
+              </div>
+            ) : filteredClusters.length === 0 ? (
+              <div className="text-center py-12">
+                <XCircle className={`w-12 h-12 mx-auto mb-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`} />
+                <h3 className={`text-lg font-medium mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>No compute resources found</h3>
+                <p className={`${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  {searchTerm || statusFilter !== 'Show All'
+                    ? 'Try adjusting your search filters'
+                    : 'No compute resources in the system'}
+                </p>
+              </div>
+            ) : (
+              <ClusterTable
+                filteredClusters={filteredClusters}
+                handleRename={handleRename}
+                handleValidate={handleValidate}
+                handleDelete={handleDelete}
+                handleViewMetrics={handleViewMetrics}
+                handleViewPods={handleViewPods}
+                darkMode={darkMode}
+                communeMiners={communeMiners}
+                bittensorMiners={bittensorMiners}
+              />
+            )}
+          </div>
+        </>
+      ) : (
+        <PodsView
+          minerId={selectedMinerId}
+          onBack={handleBackToDashboard}
+          darkMode={darkMode}
+        />
+      )}
       {showMetricsModal && (
         <MetricsModal
           cluster={selectedCluster}

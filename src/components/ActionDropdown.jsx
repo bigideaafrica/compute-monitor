@@ -1,7 +1,8 @@
-import { BarChart2, Layers, MoreHorizontal, Pencil, XCircle } from 'lucide-react';
-import React, { useState } from 'react';
+/* eslint-disable react/prop-types */
+import { BarChart2, CheckCircle, Layers, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
-const ActionDropdown = ({ onRename, onTerminate, onViewMetrics, onViewPods, clusterStatus, darkMode }) => {
+const ActionDropdown = ({ onRename, onValidate, onDelete, onViewMetrics, onViewPods, clusterStatus, validationStatus, darkMode }) => {
     const [isOpen, setIsOpen] = useState(false);
     
     const handleDropdownClick = () => {
@@ -16,8 +17,8 @@ const ActionDropdown = ({ onRename, onTerminate, onViewMetrics, onViewPods, clus
         <div className="relative inline-block">
             <button
                 onClick={handleDropdownClick}
-                className={`p-1 rounded transition-colors ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}> {/* Reduced padding */}
-                <MoreHorizontal className={`w-3 h-3 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`} /> {/* Reduced icon size */}
+                className={`p-1 rounded transition-colors ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}>
+                <MoreHorizontal className={`w-3 h-3 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`} />
             </button>
             
             {isOpen && (
@@ -26,7 +27,7 @@ const ActionDropdown = ({ onRename, onTerminate, onViewMetrics, onViewPods, clus
                         className="fixed inset-0 z-10"
                         onClick={handleClickOutside}
                     />
-                    <div className={`absolute right-0 mt-1 w-40 rounded shadow-lg border z-20 py-0.5 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}> {/* Reduced width */}
+                    <div className={`absolute right-0 mt-1 w-40 rounded shadow-lg border z-20 py-0.5 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
                         {onViewMetrics && (
                             <button
                                 onClick={() => {
@@ -58,22 +59,35 @@ const ActionDropdown = ({ onRename, onTerminate, onViewMetrics, onViewPods, clus
                                 onRename();
                                 setIsOpen(false);
                             }}
-                            className={`w-full px-3 py-1 text-xs text-left flex items-center gap-1 ${darkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-50'}`}> {/* Reduced text, padding */}
-                            <Pencil className="w-3 h-3" strokeWidth={1.5} /> {/* Reduced icon size */}
+                            className={`w-full px-3 py-1 text-xs text-left flex items-center gap-1 ${darkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-50'}`}>
+                            <Pencil className="w-3 h-3" strokeWidth={1.5} />
                             Rename
                         </button>
                         <button
                             onClick={() => {
-                                onTerminate();
+                                onValidate ? onValidate() : null;
                                 setIsOpen(false);
                             }}
-                            className={`w-full px-3 py-1 text-xs text-left flex items-center gap-1 ${clusterStatus === 'Running' || clusterStatus === 'Deploying'
-                                ? `${darkMode ? 'text-red-400 hover:bg-gray-700' : 'text-red-600 hover:bg-gray-50'}`
-                                : `${darkMode ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 cursor-not-allowed'}`}`}
-                            disabled={clusterStatus !== 'Running' && clusterStatus !== 'Deploying'}
+                            className={`w-full px-3 py-1 text-xs text-left flex items-center gap-1 ${
+                                darkMode 
+                                    ? (validationStatus === 'Verified' ? 'text-orange-400 hover:bg-gray-700' : 'text-green-400 hover:bg-gray-700')
+                                    : (validationStatus === 'Verified' ? 'text-orange-600 hover:bg-gray-50' : 'text-green-600 hover:bg-gray-50')
+                            }`}
                         >
-                            <XCircle className="w-3 h-3" strokeWidth={1.5} /> {/* Reduced icon size */}
-                            Terminate
+                            <CheckCircle className="w-3 h-3" strokeWidth={1.5} />
+                            {validationStatus === 'Verified' ? 'Unvalidate' : 'Validate'}
+                        </button>
+                        <button
+                            onClick={() => {
+                                onDelete ? onDelete() : null;
+                                setIsOpen(false);
+                            }}
+                            className={`w-full px-3 py-1 text-xs text-left flex items-center gap-1 ${
+                                darkMode ? 'text-red-400 hover:bg-gray-700' : 'text-red-600 hover:bg-gray-50'
+                            }`}
+                        >
+                            <Trash2 className="w-3 h-3" strokeWidth={1.5} />
+                            Delete
                         </button>
                     </div>
                 </>
